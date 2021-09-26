@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
-	yaml "gopkg.in/yaml.v2"
+	"sigs.k8s.io/yaml"
 
 	"github.com/cosmos/cosmos-sdk/codec/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -29,6 +29,7 @@ func NewProposal(content Content, id uint64, submitTime, depositEndTime time.Tim
 	}
 
 	p := Proposal{
+		Content:          any,
 		ProposalId:       id,
 		Status:           StatusDepositPeriod,
 		FinalTallyResult: EmptyTallyResult(),
@@ -36,8 +37,6 @@ func NewProposal(content Content, id uint64, submitTime, depositEndTime time.Tim
 		SubmitTime:       submitTime,
 		DepositEndTime:   depositEndTime,
 	}
-
-	p.Content = any
 
 	return p, nil
 }

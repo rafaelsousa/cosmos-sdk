@@ -13,7 +13,6 @@ import (
 
 	"github.com/cosmos/cosmos-sdk/codec"
 	"github.com/cosmos/cosmos-sdk/store/prefix"
-	store "github.com/cosmos/cosmos-sdk/store/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 	"github.com/cosmos/cosmos-sdk/types/module"
@@ -21,7 +20,8 @@ import (
 	"github.com/cosmos/cosmos-sdk/x/upgrade/types"
 )
 
-// UpgradeInfoFileName file to store upgrade information
+// Deprecated: UpgradeInfoFileName file to store upgrade information
+// use x/upgrade/types.UpgradeInfoFilename instead.
 const UpgradeInfoFileName string = "upgrade-info.json"
 
 type Keeper struct {
@@ -112,9 +112,43 @@ func (k Keeper) GetModuleVersionMap(ctx sdk.Context) module.VersionMap {
 	return vm
 }
 
+// GetModuleVersions gets a slice of module consensus versions
+func (k Keeper) GetModuleVersions(ctx sdk.Context) []*types.ModuleVersion {
+	store := ctx.KVStore(k.storeKey)
+	it := sdk.KVStorePrefixIterator(store, []byte{types.VersionMapByte})
+	defer it.Close()
+
+	mv := make([]*types.ModuleVersion, 0)
+	for ; it.Valid(); it.Next() {
+		moduleBytes := it.Key()
+		name := string(moduleBytes[1:])
+		moduleVersion := binary.BigEndian.Uint64(it.Value())
+		mv = append(mv, &types.ModuleVersion{
+			Name:    name,
+			Version: moduleVersion,
+		})
+	}
+	return mv
+}
+
+// gets the version for a given module, and returns true if it exists, false otherwise
+func (k Keeper) getModuleVersion(ctx sdk.Context, name string) (uint64, bool) {
+	store := ctx.KVStore(k.storeKey)
+	it := sdk.KVStorePrefixIterator(store, []byte{types.VersionMapByte})
+	defer it.Close()
+
+	for ; it.Valid(); it.Next() {
+		moduleName := string(it.Key()[1:])
+		if moduleName == name {
+			version := binary.BigEndian.Uint64(it.Value())
+			return version, true
+		}
+	}
+	return 0, false
+}
+
 // ScheduleUpgrade schedules an upgrade based on the specified plan.
-// If there is another Plan already scheduled, it will overwrite it
-// (implicitly cancelling the current plan)
+// If there is another Plan already scheduled, it will cancel and overwrite it.
 // ScheduleUpgrade will also write the upgraded client to the upgraded client path
 // if an upgraded client is specified in the plan
 func (k Keeper) ScheduleUpgrade(ctx sdk.Context, plan types.Plan) error {
@@ -279,15 +313,16 @@ func (k Keeper) IsSkipHeight(height int64) bool {
 }
 
 // DumpUpgradeInfoToDisk writes upgrade information to UpgradeInfoFileName.
-func (k Keeper) DumpUpgradeInfoToDisk(height int64, name string) error {
+func (k Keeper) DumpUpgradeInfoToDisk(height int64, p types.Plan) error {
 	upgradeInfoFilePath, err := k.GetUpgradeInfoPath()
 	if err != nil {
 		return err
 	}
 
-	upgradeInfo := store.UpgradeInfo{
-		Name:   name,
+	upgradeInfo := types.Plan{
+		Name:   p.Name,
 		Height: height,
+		Info:   p.Info,
 	}
 	info, err := json.Marshal(upgradeInfo)
 	if err != nil {
@@ -305,7 +340,7 @@ func (k Keeper) GetUpgradeInfoPath() (string, error) {
 		return "", err
 	}
 
-	return filepath.Join(upgradeInfoFileDir, UpgradeInfoFileName), nil
+	return filepath.Join(upgradeInfoFileDir, types.UpgradeInfoFilename), nil
 }
 
 // getHomeDir returns the height at which the given upgrade was executed
@@ -317,8 +352,8 @@ func (k Keeper) getHomeDir() string {
 // written to disk by the old binary when panicking. An error is returned if
 // the upgrade path directory cannot be created or if the file exists and
 // cannot be read or if the upgrade info fails to unmarshal.
-func (k Keeper) ReadUpgradeInfoFromDisk() (store.UpgradeInfo, error) {
-	var upgradeInfo store.UpgradeInfo
+func (k Keeper) ReadUpgradeInfoFromDisk() (types.Plan, error) {
+	var upgradeInfo types.Plan
 
 	upgradeInfoPath, err := k.GetUpgradeInfoPath()
 	if err != nil {

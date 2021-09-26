@@ -11,7 +11,6 @@ import (
 	"github.com/cosmos/cosmos-sdk/client/flags"
 	"github.com/cosmos/cosmos-sdk/client/tx"
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	"github.com/cosmos/cosmos-sdk/types/msgservice"
 	"github.com/cosmos/cosmos-sdk/version"
 	"github.com/cosmos/cosmos-sdk/x/distribution/types"
 	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
@@ -24,7 +23,7 @@ var (
 )
 
 const (
-	MaxMessagesPerTxDefault = 5
+	MaxMessagesPerTxDefault = 0
 )
 
 // NewTxCmd returns a root CLI command handler for all x/distribution transaction commands.
@@ -111,12 +110,6 @@ $ %s tx distribution withdraw-rewards %s1gghjut3ccd8ay0zduzj64hwre2fxs9ldmqhffj 
 				msgs = append(msgs, types.NewMsgWithdrawValidatorCommission(valAddr))
 			}
 
-			for _, msg := range msgs {
-				if err := msg.ValidateBasic(); err != nil {
-					return err
-				}
-			}
-
 			return tx.GenerateOrBroadcastTxCLI(clientCtx, cmd.Flags(), msgs...)
 		},
 	}
@@ -133,11 +126,12 @@ func NewWithdrawAllRewardsCmd() *cobra.Command {
 		Short: "withdraw all delegations rewards for a delegator",
 		Long: strings.TrimSpace(
 			fmt.Sprintf(`Withdraw all rewards for a single delegator.
+Note that if you use this command with --%[2]s=%[3]s or --%[2]s=%[4]s, the %[5]s flag will automatically be set to 0.
 
 Example:
-$ %s tx distribution withdraw-all-rewards --from mykey
+$ %[1]s tx distribution withdraw-all-rewards --from mykey
 `,
-				version.AppName,
+				version.AppName, flags.FlagBroadcastMode, flags.BroadcastSync, flags.BroadcastAsync, FlagMaxMessagesPerTx,
 			),
 		),
 		Args: cobra.NoArgs,
@@ -170,13 +164,15 @@ $ %s tx distribution withdraw-all-rewards --from mykey
 				}
 
 				msg := types.NewMsgWithdrawDelegatorReward(delAddr, val)
-				if err := msg.ValidateBasic(); err != nil {
-					return err
-				}
 				msgs = append(msgs, msg)
 			}
 
 			chunkSize, _ := cmd.Flags().GetInt(FlagMaxMessagesPerTx)
+			if clientCtx.BroadcastMode != flags.BroadcastBlock && chunkSize > 0 {
+				return fmt.Errorf("cannot use broadcast mode %[1]s with %[2]s != 0",
+					clientCtx.BroadcastMode, FlagMaxMessagesPerTx)
+			}
+
 			return newSplitAndApply(tx.GenerateOrBroadcastTxCLI, clientCtx, cmd.Flags(), msgs, chunkSize)
 		},
 	}
@@ -215,14 +211,8 @@ $ %s tx distribution set-withdraw-addr %s1gghjut3ccd8ay0zduzj64hwre2fxs9ld75ru9p
 			}
 
 			msg := types.NewMsgSetWithdrawAddress(delAddr, withdrawAddr)
-			svcMsgClientConn := &msgservice.ServiceMsgClientConn{}
-			msgClient := types.NewMsgClient(svcMsgClientConn)
-			_, err = msgClient.SetWithdrawAddress(cmd.Context(), msg)
-			if err != nil {
-				return err
-			}
 
-			return tx.GenerateOrBroadcastTxCLI(clientCtx, cmd.Flags(), svcMsgClientConn.GetMsgs()...)
+			return tx.GenerateOrBroadcastTxCLI(clientCtx, cmd.Flags(), msg)
 		},
 	}
 
@@ -257,14 +247,8 @@ $ %s tx distribution fund-community-pool 100uatom --from mykey
 			}
 
 			msg := types.NewMsgFundCommunityPool(amount, depositorAddr)
-			svcMsgClientConn := &msgservice.ServiceMsgClientConn{}
-			msgClient := types.NewMsgClient(svcMsgClientConn)
-			_, err = msgClient.FundCommunityPool(cmd.Context(), msg)
-			if err != nil {
-				return err
-			}
 
-			return tx.GenerateOrBroadcastTxCLI(clientCtx, cmd.Flags(), svcMsgClientConn.GetMsgs()...)
+			return tx.GenerateOrBroadcastTxCLI(clientCtx, cmd.Flags(), msg)
 		},
 	}
 
@@ -306,7 +290,7 @@ Where proposal.json contains:
 			if err != nil {
 				return err
 			}
-			proposal, err := ParseCommunityPoolSpendProposalWithDeposit(clientCtx.JSONMarshaler, args[0])
+			proposal, err := ParseCommunityPoolSpendProposalWithDeposit(clientCtx.Codec, args[0])
 			if err != nil {
 				return err
 			}
@@ -333,14 +317,7 @@ Where proposal.json contains:
 				return err
 			}
 
-			svcMsgClientConn := &msgservice.ServiceMsgClientConn{}
-			msgClient := govtypes.NewMsgClient(svcMsgClientConn)
-			_, err = msgClient.SubmitProposal(cmd.Context(), msg)
-			if err != nil {
-				return err
-			}
-
-			return tx.GenerateOrBroadcastTxCLI(clientCtx, cmd.Flags(), svcMsgClientConn.GetMsgs()...)
+			return tx.GenerateOrBroadcastTxCLI(clientCtx, cmd.Flags(), msg)
 		},
 	}
 

@@ -44,7 +44,7 @@ func (h *MockGovHooksReceiver) AfterProposalVotingPeriodEnded(ctx sdk.Context, p
 }
 
 func TestHooks(t *testing.T) {
-	app := simapp.Setup(false)
+	app := simapp.Setup(t, false)
 	ctx := app.BaseApp.NewContext(false, tmproto.Header{})
 
 	minDeposit := app.GovKeeper.GetDepositParams(ctx).MinDeposit
@@ -52,10 +52,8 @@ func TestHooks(t *testing.T) {
 
 	govHooksReceiver := MockGovHooksReceiver{}
 
-	app.GovKeeper = *keeper.UpdateHooks(&app.GovKeeper,
-		types.NewMultiGovHooks(
-			&govHooksReceiver,
-		),
+	keeper.UnsafeSetHooks(
+		&app.GovKeeper, types.NewMultiGovHooks(&govHooksReceiver),
 	)
 
 	require.False(t, govHooksReceiver.AfterProposalSubmissionValid)

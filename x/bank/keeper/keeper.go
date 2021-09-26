@@ -28,6 +28,7 @@ type Keeper interface {
 	GetPaginatedTotalSupply(ctx sdk.Context, pagination *query.PageRequest) (sdk.Coins, *query.PageResponse, error)
 	IterateTotalSupply(ctx sdk.Context, cb func(sdk.Coin) bool)
 	GetDenomMetaData(ctx sdk.Context, denom string) (types.Metadata, bool)
+	HasDenomMetaData(ctx sdk.Context, denom string) bool
 	SetDenomMetaData(ctx sdk.Context, denomMetaData types.Metadata)
 	IterateAllDenomMetaData(ctx sdk.Context, cb func(types.Metadata) bool)
 
@@ -55,6 +56,7 @@ type BaseKeeper struct {
 	paramSpace paramtypes.Subspace
 }
 
+// GetPaginatedTotalSupply queries for the supply, ignoring 0 coins, with a given pagination
 func (k BaseKeeper) GetPaginatedTotalSupply(ctx sdk.Context, pagination *query.PageRequest) (sdk.Coins, *query.PageResponse, error) {
 	store := ctx.KVStore(k.storeKey)
 	supplyStore := prefix.NewStore(store, types.SupplyKey)
@@ -67,10 +69,11 @@ func (k BaseKeeper) GetPaginatedTotalSupply(ctx sdk.Context, pagination *query.P
 		if err != nil {
 			return fmt.Errorf("unable to convert amount string to Int %v", err)
 		}
-		supply = append(supply, sdk.NewCoin(string(key), amount))
+
+		// `Add` omits the 0 coins addition to the `supply`.
+		supply = supply.Add(sdk.NewCoin(string(key), amount))
 		return nil
 	})
-
 	if err != nil {
 		return nil, nil, err
 	}
@@ -124,7 +127,7 @@ func (k BaseKeeper) DelegateCoins(ctx sdk.Context, delegatorAddr, moduleAccAddr 
 	balances := sdk.NewCoins()
 
 	for _, coin := range amt {
-		balance := k.GetBalance(ctx, delegatorAddr, coin.Denom)
+		balance := k.GetBalance(ctx, delegatorAddr, coin.GetDenom())
 		if balance.IsLT(coin) {
 			return sdkerrors.Wrapf(
 				sdkerrors.ErrInsufficientFunds, "failed to delegate; %s is smaller than %s", balance, amt,
@@ -211,10 +214,11 @@ func (k BaseKeeper) GetSupply(ctx sdk.Context, denom string) sdk.Coin {
 	}
 }
 
-// GetDenomMetaData retrieves the denomination metadata
+// GetDenomMetaData retrieves the denomination metadata. returns the metadata and true if the denom exists,
+// false otherwise.
 func (k BaseKeeper) GetDenomMetaData(ctx sdk.Context, denom string) (types.Metadata, bool) {
 	store := ctx.KVStore(k.storeKey)
-	store = prefix.NewStore(store, types.DenomMetadataKey(denom))
+	store = prefix.NewStore(store, types.DenomMetadataPrefix)
 
 	bz := store.Get([]byte(denom))
 	if bz == nil {
@@ -225,6 +229,13 @@ func (k BaseKeeper) GetDenomMetaData(ctx sdk.Context, denom string) (types.Metad
 	k.cdc.MustUnmarshal(bz, &metadata)
 
 	return metadata, true
+}
+
+// HasDenomMetaData checks if the denomination metadata exists in store.
+func (k BaseKeeper) HasDenomMetaData(ctx sdk.Context, denom string) bool {
+	store := ctx.KVStore(k.storeKey)
+	store = prefix.NewStore(store, types.DenomMetadataPrefix)
+	return store.Has([]byte(denom))
 }
 
 // GetAllDenomMetaData retrieves all denominations metadata
@@ -261,7 +272,7 @@ func (k BaseKeeper) IterateAllDenomMetaData(ctx sdk.Context, cb func(types.Metad
 // SetDenomMetaData sets the denominations metadata
 func (k BaseKeeper) SetDenomMetaData(ctx sdk.Context, denomMetaData types.Metadata) {
 	store := ctx.KVStore(k.storeKey)
-	denomMetaDataStore := prefix.NewStore(store, types.DenomMetadataKey(denomMetaData.Base))
+	denomMetaDataStore := prefix.NewStore(store, types.DenomMetadataPrefix)
 
 	m := k.cdc.MustMarshal(&denomMetaData)
 	denomMetaDataStore.Set([]byte(denomMetaData.Base), m)
@@ -425,17 +436,25 @@ func (k BaseKeeper) BurnCoins(ctx sdk.Context, moduleName string, amounts sdk.Co
 	return nil
 }
 
+// setSupply sets the supply for the given coin
 func (k BaseKeeper) setSupply(ctx sdk.Context, coin sdk.Coin) {
-	store := ctx.KVStore(k.storeKey)
-	supplyStore := prefix.NewStore(store, types.SupplyKey)
-
 	intBytes, err := coin.Amount.Marshal()
 	if err != nil {
 		panic(fmt.Errorf("unable to marshal amount value %v", err))
 	}
-	supplyStore.Set([]byte(coin.GetDenom()), intBytes)
+
+	store := ctx.KVStore(k.storeKey)
+	supplyStore := prefix.NewStore(store, types.SupplyKey)
+
+	// Bank invariants and IBC requires to remove zero coins.
+	if coin.IsZero() {
+		supplyStore.Delete([]byte(coin.GetDenom()))
+	} else {
+		supplyStore.Set([]byte(coin.GetDenom()), intBytes)
+	}
 }
 
+// trackDelegation tracks the delegation of the given account if it is a vesting account
 func (k BaseKeeper) trackDelegation(ctx sdk.Context, addr sdk.AccAddress, balance, amt sdk.Coins) error {
 	acc := k.ak.GetAccount(ctx, addr)
 	if acc == nil {
@@ -452,6 +471,7 @@ func (k BaseKeeper) trackDelegation(ctx sdk.Context, addr sdk.AccAddress, balanc
 	return nil
 }
 
+// trackUndelegation trakcs undelegation of the given account if it is a vesting account
 func (k BaseKeeper) trackUndelegation(ctx sdk.Context, addr sdk.AccAddress, amt sdk.Coins) error {
 	acc := k.ak.GetAccount(ctx, addr)
 	if acc == nil {
@@ -468,6 +488,9 @@ func (k BaseKeeper) trackUndelegation(ctx sdk.Context, addr sdk.AccAddress, amt 
 	return nil
 }
 
+// IterateTotalSupply iterates over the total supply calling the given cb (callback) function
+// with the balance of each coin.
+// The iteration stops if the callback returns true.
 func (k BaseViewKeeper) IterateTotalSupply(ctx sdk.Context, cb func(sdk.Coin) bool) {
 	store := ctx.KVStore(k.storeKey)
 	supplyStore := prefix.NewStore(store, types.SupplyKey)
